@@ -35,3 +35,19 @@ jobs:
 
       - name: Type check
         run: mypy
+
+  docs:
+    name: docs (bilingual sync)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # README.md and README.zh-CN.md must stay structurally in sync.
+      # Stdlib only -- no install step needed.
+      - name: Check README i18n parity
+        run: python tools/check_readme_i18n.py

@@ -4,151 +4,156 @@
 
 **Recursive Self-Improvement for Hybrid Agents**
 
-数字经验与物理经验互相进化 · 每一次自进化都必须留下可复核的物证
+Digital and physical experience improving each other · every self-improvement must leave checkable evidence
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.12%2B-3776AB)](pyproject.toml)
 [![Status](https://img.shields.io/badge/status-design--stage-orange)]()
+[![CI](https://github.com/possibleme2026-lang/rsihybridagent/actions/workflows/ci.yml/badge.svg)](https://github.com/possibleme2026-lang/rsihybridagent/actions/workflows/ci.yml)
+
+English | [简体中文](README.zh-CN.md)
 
 </div>
 
 ---
 
-## 一句话
+## In one sentence
 
-**rsihybridagent 是一个让「数字侧 agent」与「物理侧机器人」互相喂养经验的自进化框架，并且它拒绝在没有物证的情况下宣布任何一次进化成功。**
+**rsihybridagent is a self-improvement framework in which a digital agent and a physical robot feed experience to each other — and it refuses to call any improvement successful without evidence that can be checked.**
 
 ---
 
-## 为什么需要它
+## Why it is needed
 
-现有工作分成两半，各自都不完整：
+Existing work is split in two, and each half is incomplete:
 
-| 现有形态 | 代表 | 有什么 | 缺什么 |
+| Current form | Examples | Has | Missing |
 |---|---|---|---|
-| 数字自进化基础设施 | reef、cordis | 完整的「推理→反馈→学习→版本化交付」闭环 | **没有身体**。物理侧概念零命中 |
-| 物理 agentic 框架 | RPent、openpi | LLM planner + 冻结 VLA 的操作能力 | **没有学习闭环**。全仓无梯度更新 |
-| 具身 RL 训练 | RLinf、slime | 能训 VLA 权重 | **没有 harness 进化面**，也没有混合任务 |
+| Digital self-improvement infrastructure | reef, cordis | A complete inference → feedback → learning → versioned-delivery loop | **No body.** No physical-side concept at all |
+| Physical agentic frameworks | RPent, openpi | An LLM planner plus frozen-VLA manipulation | **No learning loop.** No gradient update anywhere in the repository |
+| Embodied RL training | RLinf, slime | The ability to train VLA weights | **No harness evolution surface**, and no hybrid tasks |
 
-rsihybridagent 的主张是：**这两半不是可以各自独立的，它们必须互锁。**
+The claim of rsihybridagent is that **these halves cannot be independent. They must interlock.**
 
-具体地说，四个咬合点（详见[架构文档](docs/architecture.md)）：
+Concretely, four points of engagement (see the [architecture document](docs/architecture.md)):
 
-1. **数字 → 物理**：数字侧进化出的 skill，无需重训 VLA 就能提升物理任务成功率
-2. **物理 → 数字**：物理侧的失败模式，变成数字侧的约束条目，改变 planner 决策
-3. **物理 → 权重**：物理侧的成功轨迹，成为 VLA 的训练数据
-4. **数字 → 权重**：数字侧的世界模型变强，生成更好的 primitive 分解，喂出更干净的数据
-
----
-
-## 三个不妥协的设计原则
-
-### 1. 物证台账（Evidence Ledger）—— 不接受无物证的自进化
-
-这是本项目**最核心的差异化**，也是从具身 benchmark 实践中得到的硬教训。
-
-自进化系统最大的失败模式不是「学不会」，而是**「以为自己学会了」**：
-
-- 验证器里「没跑」被记成了「跑过了」→ 空过（vacuous pass）
-- 「跑失败」被记成了「跳过」→ 失败被隐藏
-- 进化的收益来自噪声而非真实能力提升 → 虚假进步
-
-rsihybridagent 要求**每一次进化都必须附带一条可复核的物证记录**：
-
-```
-一次进化 = 一个变更 + 一份物证 + 一个归因
-```
-
-- **变更**：改了哪个 surface（权重 / harness / memory）
-- **物证**：哪些实例、哪些种子、哪个层级上验证过，**显式记录每层的状态**
-- **归因**：这次进步/退步**归因到哪一层**。归因错的记录判定为失败
-
-没有物证的进化不允许 commit。**每层的「未运行」与「运行失败」必须分开记录**，这是硬约束。
-
-### 2. 双基底分离（Substrate Separation）—— 物理侧不依赖 agent 侧的 GPU
-
-数字侧和物理侧是**独立进程**，通过 RPC 通信。agent 进程不 import torch。
-
-理由很实际：8GB 显存的笔记本上，agent 推理和物理仿真同时跑必然 OOM。分离后可以：
-
-- agent 侧跑在 CPU（本机可跑）
-- 物理侧跑在 GPU 机器或远程集群
-- 一侧崩溃不影响另一侧的记录完整性
-
-### 3. 版本化一切（Version Everything）—— 可回滚、可 A/B、可复现
-
-自进化的对象是**版本化的 artifact**，不是「当前状态」。每个 artifact 有三种身份，必须分开追踪：
-
-- `content_id`：内容指纹（同样的内容永远同一个 id）
-- `release_id`：发布版本（一次 commit 产生一个）
-- `runtime_load_id`：运行时实际加载的实例（热替换时与 release 不同）
-
-混用这三种 id 是自进化系统最难查的 bug 来源。
+1. **Digital → physical**: a skill evolved on the digital side raises physical task success without retraining the VLA
+2. **Physical → digital**: a failure pattern observed on the physical side becomes a constraint the planner reads, changing its decisions
+3. **Physical → weights**: successful physical trajectories become VLA training data
+4. **Digital → weights**: a stronger digital world model produces better primitive decompositions, yielding cleaner data
 
 ---
 
-## 架构总览
+## Three principles we do not compromise on
+
+### 1. Evidence Ledger — no self-improvement without checkable evidence
+
+This is the project's **central differentiator**, and it comes from a hard lesson learned in embodied benchmark work.
+
+The dominant failure mode of a self-improving system is not failing to learn. It is **believing it learned**:
+
+- A layer that never ran is recorded as having passed → vacuous pass
+- A layer that failed is recorded as skipped → the failure is hidden
+- A measured gain comes from noise rather than capability → false progress
+
+rsihybridagent requires **every improvement to carry a checkable evidence record**:
+
+```
+one improvement = one change + one piece of evidence + one attribution
+```
+
+- **Change**: which surface was modified (weights / harness / memory)
+- **Evidence**: which instances, which seeds, verified at which layers — **with each layer's status recorded explicitly**
+- **Attribution**: which layer this gain or regression is **attributed to**. A misattributed record is a failure
+
+An improvement without evidence is not allowed to commit. **A layer that did not run and a layer that ran and failed must be recorded separately** — this is a hard constraint.
+
+### 2. Substrate Separation — the physical side does not depend on the agent side's GPU
+
+The digital and physical sides are **separate processes** communicating over RPC. The agent process does not import torch.
+
+The reason is practical: on an 8 GB laptop GPU, agent inference and physical simulation running together will OOM. Separating them means:
+
+- The agent side runs on CPU
+- The physical side runs on a GPU machine or a remote cluster
+- One side crashing does not compromise the other's record integrity
+
+### 3. Version Everything — rollback, A/B comparison, reproducibility
+
+The object of self-improvement is a **versioned artifact**, not "the current state". Every artifact has three identities that must be tracked separately:
+
+- `content_id`: a fingerprint of the content (identical content always shares one)
+- `release_id`: one published version (one commit produces one)
+- `runtime_load_id`: the instance actually loaded by a running service (differs from the release after a hot swap)
+
+Conflating these three is the hardest bug class to diagnose in a self-improving system.
+
+---
+
+## Architecture overview
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  Interlock Layer    四个咬合点：数字↔物理↔权重 的双向喂养      │
+│  Interlock Layer    Four points of engagement: digital ↔      │
+│                     physical ↔ weights, feeding both ways     │
 ├─────────────────────────────────────────────────────────────┤
 │  Recursive Loop     Serve → Observe → Grow → Commit          │
 ├─────────────────────────────────────────────────────────────┤
-│  Surfaces           权重面 · harness 面 · memory 面           │
+│  Surfaces           weights · harness · memory               │
 ├─────────────────────────────────────────────────────────────┤
 │  Substrate          Digital Substrate │ Physical Substrate    │
 ├─────────────────────────────────────────────────────────────┤
-│  Evidence Ledger    贯穿全部四层的物证与归因（横切关注点）      │
+│  Evidence Ledger    Evidence and attribution across all four  │
+│                     layers (cross-cutting concern)            │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-五层的职责边界、接口契约与数据流，见 **[docs/architecture.md](docs/architecture.md)**。
+The five layers' responsibility boundaries, interface contracts, and data flow are in **[docs/architecture.md](docs/architecture.md)**.
 
 ---
 
-## 核心抽象
+## Core abstractions
 
-框架不绑定任何具体的 LLM、VLA、仿真器或训练后端。四个扩展点：
+The framework binds to no specific LLM, VLA, simulator, or training backend. Four extension points:
 
-| 抽象 | 职责 | 对应现有实现 |
+| Abstraction | Responsibility | Corresponding existing implementations |
 |---|---|---|
-| `Substrate` | 执行基底（数字 or 物理） | 容器/沙箱 · LIBERO/RoboCasa/真机 |
-| `Surface` | 可进化的 artifact 类型 | 权重 · prompt/rules/skills · memory |
-| `Recipe` | 如何从记录产生更新 | SAO/GRPO · harness 编辑 · memory 合并 |
-| `Ledger` | 物证与归因 | 分层验证器 · 失败归因 |
+| `Substrate` | Execution base (digital or physical) | Containers / sandboxes · LIBERO/RoboCasa/real robot |
+| `Surface` | Evolvable artifact family | Weights · prompt/rules/skills · memory |
+| `Recipe` | How an update is produced from records | SAO/GRPO · harness editing · memory merging |
+| `Ledger` | Evidence and attribution | Layered verifiers · failure attribution |
 
-四个扩展点的完整接口签名见 **[docs/interfaces.md](docs/interfaces.md)**。
-
----
-
-## 状态
-
-**当前为设计阶段（design-stage）。** 已交付：
-
-- ✅ 架构设计与接口契约（`docs/`）
-- ✅ 核心抽象的类型骨架（`src/rsihybridagent/`）
-- ⬜ 可运行的 reference implementation
-- ⬜ 仿真环境的端到端验证
-
-**一个必须说清的前置约束**：本框架的完整服务依赖 POSIX 进程组语义（`os.killpg` / `os.setsid` / `fcntl`），**Windows 原生不可用**，需 WSL2 或 Linux 容器。
+Full signatures for all four extension points are in **[docs/interfaces.md](docs/interfaces.md)**.
 
 ---
 
-## 与现有项目的关系
+## Status
 
-rsihybridagent 站在两个优秀开源项目之上，并明确其增量：
+**Currently at design stage.** Delivered:
 
-| 项目 | 许可证 | rsihybridagent 借用 | rsihybridagent 新增 |
+- ✅ Architecture design and interface contracts (`docs/`)
+- ✅ Type skeletons for the core abstractions (`src/rsihybridagent/`)
+- ⬜ A runnable reference implementation
+- ⬜ End-to-end validation against a simulator
+
+**One prerequisite that must be stated plainly**: the full service depends on POSIX process-group semantics (`os.killpg` / `os.setsid` / `fcntl`), so it **does not run on native Windows**. Use WSL2 or a Linux container. The core abstractions and the test suite do run on Windows.
+
+---
+
+## Relationship to existing projects
+
+rsihybridagent builds on two excellent open-source projects, and states its increment explicitly:
+
+| Project | License | Borrowed by rsihybridagent | Added by rsihybridagent |
 |---|---|---|---|
-| [reef](https://github.com/Human-Agent-Society/reef) | Apache-2.0 | 四步循环、recipe/surface/runtime 抽象、版本发布链 | 物理基底、物证台账、互锁层 |
-| [RPent](https://github.com/RLinf/RPent) | Apache-2.0 | 物理侧 RPC 解耦、memory schema、planner 适配 | 学习闭环、权重回灌、跨环境 memory |
+| [reef](https://github.com/Human-Agent-Society/reef) | Apache-2.0 | The four-step loop; recipe/surface/runtime abstraction; the artifact release chain | Physical substrate, evidence ledger, interlock layer |
+| [RPent](https://github.com/RLinf/RPent) | Apache-2.0 | Physical-side RPC decoupling; the memory schema; the planner adapter | The learning loop, weight feedback, cross-environment memory |
 
-**不做 fork，做集成。** 物理侧以独立 recipe + adapter + runtime backend 的形式接入，跟随上游演进。
+**Integrate, do not fork.** The physical side arrives as an independent recipe, adapter, and runtime backend so it can follow upstream changes rather than diverge from them.
 
-完整的借鉴清单、论文引用与许可证遵守说明，见 **[References](#references)**。
+The full list of influences, paper citations, and license-compliance notes are in **[References](#references)**.
 
-### 如何引用本项目
+### How to cite this project
 
 ```bibtex
 @misc{rsihybridagent2026,
@@ -162,54 +167,55 @@ rsihybridagent 站在两个优秀开源项目之上，并明确其增量：
 
 ---
 
-## 快速开始
+## Quick start
 
-> 完整服务需要 Linux 环境（WSL2 或容器）。核心抽象与物证台账可在 CPU 上运行。
+> The full service needs a Linux environment (WSL2 or a container). The core abstractions and the evidence ledger run on CPU.
 
 ```bash
-git clone <this-repo> && cd rsihybridagent
+git clone https://github.com/possibleme2026-lang/rsihybridagent && cd rsihybridagent
 uv venv --python 3.12 && source .venv/bin/activate
 uv pip install -e ".[dev]"
-python -c "import rsihybridagent; print(rsihybridagent.__version__)"
+
+pytest -q
+rsihybrid channels
 ```
 
 ---
 
 ## References
 
-### 1. 直接建立其上的项目
+### 1. Projects this work builds on
 
-以下开源项目构成本项目的架构基础。两者均为 Apache-2.0，与本项目许可证兼容。
+The following open-source projects form the architectural basis of this work. All are Apache-2.0 and license-compatible with this project.
 
 **[reef](https://github.com/Human-Agent-Society/reef)** · Apache-2.0 · PyPI `reef-infra`
 
-自进化 agent 的持续学习基础设施。本项目借鉴其：
+Continual-learning infrastructure for self-improving agents. This project borrows:
 
-- 四步循环的划分（Serve → Observe → Grow → Commit）
-- recipe / surface / runtime 三层抽象，以及「核心在包内、方法在 `recipes/`」的边界纪律
-- artifact 版本发布链与三种 artifact 身份分离的设计
-- receipt 机制（一次交互的凭据，用于把反馈关联回记录）
+- The division of the four-step loop (Serve → Observe → Grow → Commit)
+- The recipe / surface / runtime three-layer abstraction, and the boundary discipline that keeps shared mechanisms in the package while method-specific policy stays outside it
+- The artifact release chain, and the separation of the three artifact identities
+- The receipt mechanism (a handle for one interaction, used to link feedback back to its record)
 
 **[RPent](https://github.com/RLinf/RPent)** · Apache-2.0 · PyPI `rpent`
 
-物理世界的 agentic 框架（planner + 冻结 VLA + 仿真器/真机）。本项目借鉴其：
+An agentic framework for the physical world (planner + frozen VLA + simulator/real robot). This project borrows:
 
-- 物理侧 RPC 完全解耦的设计（`--env-endpoint` / `--vla-endpoint` 允许 agent 进程不 import torch）
-- memory 的 Markdown + YAML frontmatter schema（`scope` / `kind` / `confidence` / `evidence`）
-- planner 适配层与 robot 的动态发现机制
+- The fully decoupled physical-side RPC design (`--env-endpoint` / `--vla-endpoint` let the agent process avoid importing torch)
+- The memory schema of Markdown plus YAML frontmatter (`scope` / `kind` / `confidence` / `evidence`)
+- The planner adapter layer and dynamic robot discovery
 
 **[cordis](https://github.com/cordiverse/cordis)** · Apache-2.0
 
-harness 的组合与演化引擎，reef 的 harness 进化面构建于其上。
+The harness composition and evolution engine. reef's harness evolution surface is built on it.
 
 **[Slime](https://github.com/THUDM/slime)** · Apache-2.0 · **[SGLang](https://github.com/sgl-project/sglang)** · Apache-2.0
 
-模型权重训练与高性能推理引擎，构成权重面的训练与服务体系。
+Model weight training and high-performance inference, forming the training and serving system for the weights surface.
 
-### 2. 论文引用
+### 2. Paper citations
 
-本项目的物理侧设计参考了 **Harness VLA** 的核心结论——记忆引导的 agent 能让冻结的 VLA
-显著变强，这正是不重训权重也能提升物理任务成功率的依据：
+The physical-side design of this project draws on the central finding of **Harness VLA** — that a memory-guided agent makes a frozen VLA substantially stronger. This is the basis for claiming that physical task success can improve without retraining weights:
 
 ```bibtex
 @article{zhang2026harnessvla,
@@ -223,29 +229,24 @@ harness 的组合与演化引擎，reef 的 harness 进化面构建于其上。
 }
 ```
 
-### 3. 设计思想的来源
+### 3. Origin of the design ideas
 
-**分层验证的诚实记账**（本项目的核心主张：未运行 ≠ 失败 ≠ 跳过）来自具身 benchmark 的工程实践，
-而非论文。其参考实现与踩坑记录见 `hybrid-embodied-bench` 中的 Harbor 任务
-`terminal-bench-science/hybrid-lab-quarantine`。
+**Honest accounting in layered verification** — this project's central claim that *not run* is neither *failed* nor *skipped* — comes from embodied benchmark engineering practice, not from a paper. Its reference implementation and the pitfalls encountered are recorded in the Harbor task `terminal-bench-science/hybrid-lab-quarantine` in `hybrid-embodied-bench`.
 
-该任务的三层验证（data / controller / embodied）在集成测试中抓出过一个真 bug：
-grader 把某一层的 skip 写进了失败字段，导致一个变体看起来「挂了两层」。
-这条教训直接催生了本项目的 `LedgerStatus` 设计。
+That task's three verification layers (data / controller / embodied) surfaced a real bug during integration testing: the grader wrote one layer's skip into its failure field, making one variant appear to have "failed two layers". That lesson directly produced this project's `LayerStatus` design.
 
-**任务格式**参考 [Harbor](https://github.com/laude-institute/harbor) / Terminal-Bench。
+**Task format** follows [Harbor](https://github.com/laude-institute/harbor) / Terminal-Bench.
 
-### 4. 许可证遵守
+### 4. License compliance
 
-本项目以 Apache-2.0 发布。对上述项目的使用方式为**架构借鉴与接口对接，未复制其源代码**。
+This project is released under Apache-2.0. Its use of the projects above is **architectural inspiration and interface integration; no source code was copied**.
 
-若后续版本直接复用其中任何代码，将保留原始版权声明、在 `NOTICE` 中注明来源，并遵守
-Apache-2.0 第 4 条关于衍生作品的要求。
+Should a later version reuse any code directly, the original copyright notice will be retained, the source will be recorded in `NOTICE`, and the requirements of Apache-2.0 section 4 for derivative works will be observed.
 
-本项目为独立实现，与上述项目无隶属关系，也未获得其背书。
+This project is an independent implementation. It is not affiliated with, and has not been endorsed by, any of the projects above.
 
 ---
 
-## 许可证
+## License
 
-Apache-2.0。见 [LICENSE](LICENSE)。
+Apache-2.0. See [LICENSE](LICENSE).

@@ -1,0 +1,70 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "rsihybridagent"
+version = "0.0.1"
+description = "Recursive self-improvement for hybrid agents: digital and physical experience improving each other, with an evidence ledger that refuses unverified progress"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+keywords = [
+    "self-improvement",
+    "continual-learning",
+    "embodied-agent",
+    "hybrid-agent",
+    "recursive-self-improvement",
+]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+# Digital substrate: containerized or sandboxed execution.
+digital = [
+    "httpx>=0.27",
+]
+
+# Physical substrate: simulator and robot integration. GPU-bound.
+# Kept in an extra so the base install stays usable on CPU.
+physical = [
+    "numpy>=1.26",
+]
+
+# Weight-training surface.
+train = []
+
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+    "mypy>=1.11",
+]
+
+[project.scripts]
+rsihybrid = "rsihybridagent.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rsihybridagent"]
+
+[tool.ruff]
+line-length = 119
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src/rsihybridagent"]
+strict = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

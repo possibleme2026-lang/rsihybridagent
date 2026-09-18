@@ -125,18 +125,57 @@ rsihybridagent 要求**每一次进化都必须附带一条可复核的物证记
 
 四个扩展点的完整接口签名见 **[docs/interfaces.md](docs/interfaces.md)**。
 
+### 不 fork 也能接入
+
+**没人能发现的接口不是开放接口，只是一个抽象类。** 第三方包只需在**自己的**打包元数据里声明实现，本项目完全不需要知道它的存在：
+
+```toml
+[project.entry-points."rsihybridagent.substrates"]
+libero = "my_pkg.substrates:LiberoSubstrate"
+```
+
+识别 7 个注册组，每组都规定了成员必须满足的契约：
+
+| 注册组 | 必须实现 |
+|---|---|
+| `rsihybridagent.substrates` | `Substrate` |
+| `rsihybridagent.surfaces` | `Surface` |
+| `rsihybridagent.recipes` | `Recipe` |
+| `rsihybridagent.verifiers` | `Verifier` |
+| `rsihybridagent.policies` | `AdmissionPolicy` |
+| `rsihybridagent.ledgers` | `Ledger` |
+| `rsihybridagent.interlock` | `InterlockPort` |
+
+注册值可以是实现本身，也可以是一个返回实现的零参可调用对象。**不满足本组契约的值会在解析阶段就被拒绝**，而不是等到某个调用点才失败 —— 那时 traceback 会指向错误的层。
+
+```bash
+rsihybrid extensions            # 已安装了什么，以及每组要求什么
+rsihybrid check substrates libero
+```
+
 ---
 
 ## 状态
 
-**当前为设计阶段（design-stage）。** 已交付：
+**闭环已在 CPU 上端到端跑通。** `examples/arithmetic_loop.py` 在一秒内完成一整轮 Serve → Observe → Grow → Commit，其中包含一次被拒绝的候选和一次被接受的候选。
 
 - ✅ 架构设计与接口契约（`docs/`）
-- ✅ 核心抽象的类型骨架（`src/rsihybridagent/`）
-- ⬜ 可运行的 reference implementation
-- ⬜ 仿真环境的端到端验证
+- ✅ 扩展点注册机制，第三方后端不 fork 即可接入
+- ✅ 可运行的 reference implementation：substrate / surface / repository / recipe / verifier / policy / ledger
+- ✅ 确定性任务上的端到端验证（52 个测试）
+- ⬜ 物理侧 substrate（仿真器或真机）
+- ⬜ 四个互锁通道的实现 —— 目前是契约，不是代码
+- ⬜ 持久化 artifact 存储与持久化物证台账
 
-**一个必须说清的前置约束**：本框架的完整服务依赖 POSIX 进程组语义（`os.killpg` / `os.setsid` / `fcntl`），**Windows 原生不可用**，需 WSL2 或 Linux 容器。核心抽象与测试套件可在 Windows 上运行。
+```bash
+PYTHONPATH=src python examples/arithmetic_loop.py
+```
+
+**两个必须说清的前置约束。**
+
+本框架的完整服务依赖 POSIX 进程组语义（`os.killpg` / `os.setsid` / `fcntl`），**Windows 原生不可用**，需 WSL2 或 Linux 容器。核心抽象、reference implementation 与测试套件可在 Windows 上运行。
+
+参考 substrate 是**玩具**。它做算术题，目的是让物证台账能被确定性地检验 —— 那里的提升要么真实存在要么不存在，不涉及统计。它不是 benchmark，分数对任何模型都没有意义。
 
 ---
 

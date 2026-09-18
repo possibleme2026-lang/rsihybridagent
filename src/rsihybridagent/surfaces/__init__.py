@@ -16,4 +16,15 @@
 
 A surface owns version history and delivery. It does not own how a candidate is
 produced, and it does not own whether the candidate is any good.
+
+Storage lives behind an :class:`~rsihybridagent.artifact.ArtifactRepository`, so the
+implementations here differ in what their bodies mean rather than in how a release
+chain works.
 """
+
+from rsihybridagent.surfaces.memory import MemoryArtifactRepository, MemorySurface
+
+__all__ = [
+    "MemoryArtifactRepository",
+    "MemorySurface",
+]

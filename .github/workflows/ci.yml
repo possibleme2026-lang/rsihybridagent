@@ -36,6 +36,11 @@ jobs:
       - name: Type check
         run: mypy
 
+      # The reference loop must actually run, not merely type-check. A demo that
+      # silently broke would leave the README's quick-start claim unverified.
+      - name: Run the reference example
+        run: python examples/arithmetic_loop.py
+
   docs:
     name: docs (bilingual sync)
     runs-on: ubuntu-latest

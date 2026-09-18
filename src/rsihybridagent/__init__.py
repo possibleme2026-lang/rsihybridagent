@@ -21,16 +21,21 @@ The package layout follows the five architectural layers:
 
 - :mod:`rsihybridagent.core` — shared value types, identities, and the two base
   abstractions (``Substrate``, ``Surface``) every layer speaks.
+- :mod:`rsihybridagent.artifact` — artifact bodies, and the repository that resolves
+  a reference into one.
 - :mod:`rsihybridagent.ledger` — the evidence ledger and admission policies.
 - :mod:`rsihybridagent.interlock` — the four channels between the two substrates.
+- :mod:`rsihybridagent.registry` — how a third-party implementation is discovered.
 - :mod:`rsihybridagent.substrate` — execution base implementations.
 - :mod:`rsihybridagent.surfaces` — evolvable artifact family implementations.
+- :mod:`rsihybridagent.recipes` — recipe and verifier implementations.
 - :mod:`rsihybridagent.loop` — the recursive loop and its collaborator contracts.
 
 Importing this package must stay cheap and must not require a GPU stack: the
 physical substrate is an extra, and its dependencies load only at their use sites.
 """
 
+from rsihybridagent.artifact import Artifact, ArtifactError, ArtifactNotFound, ArtifactRepository
 from rsihybridagent.core import (
     ArtifactRef,
     ContentId,
@@ -46,15 +51,22 @@ from rsihybridagent.core import (
     SurfaceKind,
     Verdict,
 )
+from rsihybridagent.registry import ExtensionPoint, RegistryError, available, load, register, unregister
 
 __version__ = "0.0.1"
 
 __all__ = [
+    "Artifact",
+    "ArtifactError",
+    "ArtifactNotFound",
     "ArtifactRef",
+    "ArtifactRepository",
     "ContentId",
+    "ExtensionPoint",
     "Feedback",
     "LayerStatus",
     "Receipt",
+    "RegistryError",
     "ReleaseId",
     "RuntimeLoadId",
     "ScenarioId",
@@ -64,4 +76,8 @@ __all__ = [
     "SurfaceKind",
     "Verdict",
     "__version__",
+    "available",
+    "load",
+    "register",
+    "unregister",
 ]

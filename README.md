@@ -125,18 +125,57 @@ The framework binds to no specific LLM, VLA, simulator, or training backend. Fou
 
 Full signatures for all four extension points are in **[docs/interfaces.md](docs/interfaces.md)**.
 
+### Plugging in without forking
+
+An interface nobody can discover is not an open interface, it is just an abstract class. A package supplies an implementation by declaring it in its **own** packaging metadata, and this project never needs to know about it:
+
+```toml
+[project.entry-points."rsihybridagent.substrates"]
+libero = "my_pkg.substrates:LiberoSubstrate"
+```
+
+Seven groups are recognized, each with a contract its members must satisfy:
+
+| Group | Must implement |
+|---|---|
+| `rsihybridagent.substrates` | `Substrate` |
+| `rsihybridagent.surfaces` | `Surface` |
+| `rsihybridagent.recipes` | `Recipe` |
+| `rsihybridagent.verifiers` | `Verifier` |
+| `rsihybridagent.policies` | `AdmissionPolicy` |
+| `rsihybridagent.ledgers` | `Ledger` |
+| `rsihybridagent.interlock` | `InterlockPort` |
+
+The value may be the implementation itself or a zero-argument callable returning one. A value that does not satisfy its group's contract is **refused at resolution**, not at a later call site where the traceback would point at the wrong layer.
+
+```bash
+rsihybrid extensions            # what is installed, and what each group requires
+rsihybrid check substrates libero
+```
+
 ---
 
 ## Status
 
-**Currently at design stage.** Delivered:
+**The loop runs end to end on CPU.** `examples/arithmetic_loop.py` completes a full turn — serve, observe, grow, commit — in under a second, including one rejected candidate and one accepted one.
 
 - ✅ Architecture design and interface contracts (`docs/`)
-- ✅ Type skeletons for the core abstractions (`src/rsihybridagent/`)
-- ⬜ A runnable reference implementation
-- ⬜ End-to-end validation against a simulator
+- ✅ Extension registry, so a third-party backend plugs in without forking
+- ✅ A runnable reference implementation: substrate, surface, repository, recipe, verifier, policy, ledger
+- ✅ End-to-end validation on a deterministic task (52 tests)
+- ⬜ A physical substrate (simulator or robot)
+- ⬜ The four interlock channels implemented — they are contracts today, not code
+- ⬜ Durable artifact storage and a durable ledger
 
-**One prerequisite that must be stated plainly**: the full service depends on POSIX process-group semantics (`os.killpg` / `os.setsid` / `fcntl`), so it **does not run on native Windows**. Use WSL2 or a Linux container. The core abstractions and the test suite do run on Windows.
+```bash
+PYTHONPATH=src python examples/arithmetic_loop.py
+```
+
+**Two prerequisites that must be stated plainly.**
+
+The full service depends on POSIX process-group semantics (`os.killpg` / `os.setsid` / `fcntl`), so it **does not run on native Windows**; use WSL2 or a Linux container. The core abstractions, the reference implementation, and the test suite do run on Windows.
+
+The reference substrate is a **toy**. It answers arithmetic questions so that the ledger can be exercised deterministically — a gain there is real or absent, never statistical. It is not a benchmark, and its scores say nothing about any model.
 
 ---
 

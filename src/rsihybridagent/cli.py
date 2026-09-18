@@ -25,6 +25,7 @@ import sys
 
 from rsihybridagent import __version__
 from rsihybridagent.interlock.base import Channel
+from rsihybridagent.registry import ExtensionPoint, RegistryError, describe, load
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -37,6 +38,18 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command")
 
     sub.add_parser("channels", help="List the interlock channels and their directions.")
+
+    extensions = sub.add_parser("extensions", help="List installed and local extensions.")
+    extensions.add_argument(
+        "point",
+        nargs="?",
+        choices=[point.value for point in ExtensionPoint],
+        help="Limit the listing to one extension point.",
+    )
+
+    check = sub.add_parser("check", help="Resolve one extension and report its conformance.")
+    check.add_argument("point", choices=[point.value for point in ExtensionPoint])
+    check.add_argument("spec", help="A registered name, or 'module:attribute'.")
 
     return parser
 
@@ -52,6 +65,30 @@ def describe_channels() -> str:
     return "\n".join(lines)
 
 
+def describe_extensions(selected: str | None) -> str:
+    """Render every extension point, or just the one asked about.
+
+    An empty group is shown rather than omitted. A deployment debugging a missing backend
+    needs to see that the group exists and is empty, which is different information from
+    the group not being recognized at all.
+    """
+    points = [point for point in ExtensionPoint if selected is None or point.value == selected]
+    blocks = ["\n".join(describe(point)) for point in points]
+    return "\n\n".join(blocks)
+
+
+def check_extension(point_value: str, spec: str) -> int:
+    """Resolve one extension and report what it is, for diagnosing a wiring mistake."""
+    point = ExtensionPoint(point_value)
+    try:
+        resolved = load(point, spec)
+    except RegistryError as exc:
+        print(f"FAIL: {exc}", file=sys.stderr)
+        return 1
+    print(f"OK: {spec} -> {type(resolved).__module__}.{type(resolved).__qualname__}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run the CLI and return a process exit code."""
     parser = build_parser()
@@ -59,6 +96,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "channels":
         print(describe_channels())
         return 0
+    if args.command == "extensions":
+        print(describe_extensions(args.point))
+        return 0
+    if args.command == "check":
+        return check_extension(args.point, args.spec)
     parser.print_help()
     return 0
 

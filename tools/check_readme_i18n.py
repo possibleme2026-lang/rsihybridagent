@@ -44,8 +44,15 @@ EXTERNAL_LINK = re.compile(r"https?://[^\s)\"'<>]+")
 INTERNAL_LINK = re.compile(r"\]\(((?!https?://)[^)#][^)]*)\)")
 FENCED_BLOCK = re.compile(r"^```(\w*)\n(.*?)^```$", re.MULTILINE | re.DOTALL)
 
-#: Blocks whose content must be byte-identical in both files: they are not prose.
+#: Blocks whose content must be identical in both files: they are not prose.
+#: ``bash`` and ``toml`` are here because a command or a key must not be translated.
 MACHINE_READABLE_LANGUAGES = ("bibtex", "bash", "toml")
+
+#: Languages whose blocks may carry translated comments. A shell block's commands must
+#: match byte for byte, but its ``#`` lines are read by a human and are expected to be in
+#: the file's language. Comparing them whole would force one README to carry comments in
+#: the other's language, which is worse than the drift this script exists to catch.
+COMMENT_PREFIXES = {"bash": "#", "toml": "#"}
 
 
 class Drift(Exception):
@@ -111,12 +118,37 @@ def check_internal_links(english: str, chinese: str) -> list[str]:
     return problems
 
 
+def strip_comments(language: str, body: str) -> str:
+    """Drop comments from a block, keeping the text that actually executes.
+
+    Handles both a whole-line comment and a trailing one, because a shell example
+    conventionally annotates a command on the same line. Only the executable text is
+    compared; the annotation is prose and belongs in the file's own language.
+
+    Only for languages where ``#`` is prose. A bibtex block keeps everything: its ``%`` is
+    rare enough that treating it as a comment would hide more than it reveals.
+    """
+    prefix = COMMENT_PREFIXES.get(language)
+    if prefix is None:
+        return body
+    kept: list[str] = []
+    for line in body.splitlines():
+        code = line.split(prefix, 1)[0].rstrip() if prefix in line else line.rstrip()
+        if code:
+            kept.append(code)
+    return "\n".join(kept)
+
+
 def check_machine_readable_blocks(english: str, chinese: str) -> list[str]:
     """Blocks that are not prose must be identical, so citations cannot drift."""
     problems: list[str] = []
     for language in MACHINE_READABLE_LANGUAGES:
-        en_blocks = [body.strip() for lang, body in FENCED_BLOCK.findall(english) if lang == language]
-        zh_blocks = [body.strip() for lang, body in FENCED_BLOCK.findall(chinese) if lang == language]
+        en_blocks = [
+            strip_comments(language, body) for lang, body in FENCED_BLOCK.findall(english) if lang == language
+        ]
+        zh_blocks = [
+            strip_comments(language, body) for lang, body in FENCED_BLOCK.findall(chinese) if lang == language
+        ]
         if len(en_blocks) != len(zh_blocks):
             problems.append(
                 f"{language} block count: README.md has {len(en_blocks)}, README.zh-CN.md has {len(zh_blocks)}"

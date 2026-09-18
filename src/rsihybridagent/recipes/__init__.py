@@ -12,19 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Substrate implementations: the execution bases a hybrid agent runs on.
+"""Recipe implementations: how an update is produced from recorded interactions.
 
-The package is a namespace: a digital substrate and a physical substrate are
-independent deployments with incompatible dependencies, and neither may become a
-prerequisite for importing the other. Nothing here is imported by the top-level
-package, so installing the base package does not pull in a simulator.
+A recipe is where method-specific policy lives. The loop never inspects it, which is
+what lets a weight-training recipe and a prompt-editing recipe share one loop.
 """
 
-from rsihybridagent.substrate.arithmetic import ArithmeticRequest, ArithmeticSubstrate, evaluate, render_prompt
+from rsihybridagent.recipes.harness_hint import (
+    LAYER_BEHAVIOR,
+    LAYER_CONTRACT,
+    ArithmeticVerifier,
+    HarnessHintRecipe,
+)
 
 __all__ = [
-    "ArithmeticRequest",
-    "ArithmeticSubstrate",
-    "evaluate",
-    "render_prompt",
+    "LAYER_BEHAVIOR",
+    "LAYER_CONTRACT",
+    "ArithmeticVerifier",
+    "HarnessHintRecipe",
 ]

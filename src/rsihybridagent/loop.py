@@ -81,10 +81,17 @@ class Recipe(ABC):
     outcome, not an error, and must be distinguishable from a failed attempt.
     """
 
-    @property
     @abstractmethod
-    def surface(self) -> Surface:
-        """The surface this recipe produces candidates for."""
+    def target_surface(self) -> Surface:
+        """The surface this recipe produces candidates for.
+
+        A method rather than a property. An ``@property`` looks tidier on the base class
+        but cannot be satisfied by a dataclass field of the same name: the field becomes
+        a class attribute holding a descriptor, so the subclass stays abstract and
+        instantiation fails with a message about a missing method that the subclass
+        visibly defines. Requiring a method keeps a recipe free to be a frozen dataclass,
+        which is what most recipes want to be.
+        """
 
     @abstractmethod
     def eligible(self, receipts: tuple[Receipt, ...], feedback: Feedback, *, scenario: ScenarioId) -> bool:
@@ -181,6 +188,7 @@ class RecursiveLoop:
         )
         self._ledger.append(entry)
         if verdict is Verdict.ACCEPTED:
-            published = self._recipe.surface.publish(candidate, scenario=scenario)
-            self._recipe.surface.deliver(published, scenario=scenario)
+            surface = self._recipe.target_surface()
+            published = surface.publish(candidate, scenario=scenario)
+            surface.deliver(published, scenario=scenario)
         return entry

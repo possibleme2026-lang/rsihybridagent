@@ -30,7 +30,10 @@ from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from rsihybridagent.artifact import ArtifactRepository
 
 
 class SubstrateKind(StrEnum):
@@ -162,10 +165,14 @@ class Substrate(ABC):
     RPC, which is what lets the agent side stay on CPU.
     """
 
-    @property
     @abstractmethod
     def kind(self) -> SubstrateKind:
-        """Which substrate family this instance belongs to."""
+        """Which substrate family this instance belongs to.
+
+        A method rather than a property, for the reason given on
+        :meth:`Recipe.target_surface`: a property cannot be satisfied by a subclass's
+        dataclass field, and a substrate holding configuration is naturally a dataclass.
+        """
 
     @abstractmethod
     def execute(self, request: Mapping[str, Any], *, scenario: ScenarioId) -> tuple[Receipt, Mapping[str, Any]]:
@@ -176,8 +183,16 @@ class Substrate(ABC):
         """
 
     @abstractmethod
-    def health(self) -> Mapping[str, Any]:
-        """Report readiness. An unhealthy substrate must not accept work."""
+    def health(self, *, scenario: ScenarioId) -> Mapping[str, Any]:
+        """Report readiness for one scenario. An unhealthy substrate must not accept work.
+
+        Taking a scenario is deliberate. Readiness is not a global property: a substrate
+        whose policy artifact has not been released for a scenario is not ready for that
+        scenario, and a ``health()`` with no argument could only report the global half,
+        which would let a misconfigured scenario look healthy. An earlier version took no
+        argument and had to invent a probe scenario name to answer the question, which is
+        how the gap showed up.
+        """
 
 
 class Surface(ABC):
@@ -186,20 +201,48 @@ class Surface(ABC):
     A surface answers two questions only: what the current artifact is, and how a
     candidate replaces it. How a candidate is produced belongs to a recipe, and
     how it is verified belongs to the ledger.
+
+    A surface does not store bodies itself. It asks its repository, which is what
+    keeps storage layout out of every surface implementation: a harness surface keeps
+    a file tree and a weight surface keeps a checkpoint, and neither has to carry the
+    other's storage assumptions.
     """
 
-    @property
     @abstractmethod
     def kind(self) -> SurfaceKind:
         """Which artifact family this surface serves."""
+
+    @abstractmethod
+    def repository(self) -> ArtifactRepository:
+        """Where this surface's bodies live.
+
+        Exposed rather than hidden because the verifier needs to read a candidate's
+        body, and the verifier is deliberately a different collaborator from the
+        surface. Routing the read through the surface would make the surface the
+        single point of truth for verification input, which is the coupling the
+        separation exists to avoid.
+        """
 
     @abstractmethod
     def current(self, *, scenario: ScenarioId) -> ArtifactRef | None:
         """The artifact currently released for the scenario, or ``None`` before any commit."""
 
     @abstractmethod
-    def stage(self, candidate: ArtifactRef, *, scenario: ScenarioId) -> ArtifactRef:
-        """Place a candidate beside the current release without serving it yet."""
+    def stage(
+        self,
+        *,
+        scenario: ScenarioId,
+        files: Mapping[str, str] | None = None,
+        payload: bytes | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> ArtifactRef:
+        """Store a candidate body beside the current release without serving it yet.
+
+        The candidate's ``parent`` is the current release, so the chain records what it
+        would replace and a rollback has a target. Staging twice with identical content
+        yields two releases, not one: *proposed again* and *proposed once* are different
+        facts, and collapsing them would lose the record of a repeated attempt.
+        """
 
     @abstractmethod
     def publish(self, candidate: ArtifactRef, *, scenario: ScenarioId) -> ArtifactRef:

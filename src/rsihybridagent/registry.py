@@ -144,7 +144,7 @@ def load(point: ExtensionPoint, spec: str) -> object:
     if isinstance(raw, required):
         return raw
     if callable(raw):
-        produced = cast(Callable[[], object], raw)()
+        produced = _call_factory(raw, spec, point, required)
         if isinstance(produced, required):
             return produced
         raise RegistryError(
@@ -155,6 +155,26 @@ def load(point: ExtensionPoint, spec: str) -> object:
         f"extension {spec!r} in {point.value} is a {type(raw).__name__}, which is neither "
         f"a {required.__name__} nor a zero-argument callable returning one"
     )
+
+
+def _call_factory(raw: object, spec: str, point: ExtensionPoint, required: type) -> object:
+    """Call a zero-argument factory, turning a signature mismatch into a diagnosis.
+
+    A class is callable, so a reference to one whose constructor needs arguments lands
+    here and fails with a bare ``TypeError`` naming the constructor's parameters. That
+    traceback points at this module rather than at the wiring mistake, and it does not
+    say what to do instead. The two shapes are both legitimate — a factory that takes
+    no arguments, or a pre-built instance — so the error names both.
+    """
+    try:
+        return cast(Callable[[], object], raw)()
+    except TypeError as exc:
+        raise RegistryError(
+            f"extension {spec!r} in {point.value} could not be called with no arguments "
+            f"({exc}); a value in this group is either an instance of {required.__name__} "
+            f"or a zero-argument callable returning one, so pass a pre-built instance or "
+            f"a factory that supplies the constructor's arguments itself"
+        ) from exc
 
 
 def describe(point: ExtensionPoint) -> tuple[str, ...]:

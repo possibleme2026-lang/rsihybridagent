@@ -123,7 +123,146 @@ The framework binds to no specific LLM, VLA, simulator, or training backend. Fou
 | `Recipe` | How an update is produced from records | SAO/GRPO · harness editing · memory merging |
 | `Ledger` | Evidence and attribution | Layered verifiers · failure attribution |
 
-Full signatures for all four extension points are in **[docs/interfaces.md](docs/interfaces.md)**.
+Full signatures for these abstractions — and for the seven registration groups that
+supply them — are in **[docs/interfaces.md](docs/interfaces.md)**, which is checked
+against the real code on every run.
+
+---
+
+## Integrating your own system
+
+The framework supplies release chains, the artifact repository, the ledger, the admission policy, the loop's ordering guarantees, and scenario isolation. **You supply five things**, and the total is under sixty lines:
+
+| # | What you write | Where it goes |
+|---|---|---|
+| 1 | The policy/prompt format your system reads | a render function beside its parser |
+| 2 | `execute` — the call into your system | `Substrate.execute` |
+| 3 | `health` — how you decide readiness | `Substrate.health` |
+| 4 | Scoring | `Verifier` |
+| 5 | How the next candidate is generated | `Recipe` |
+
+A complete, runnable template is in **[examples/custom_substrate.py](examples/custom_substrate.py)**. Run it:
+
+```bash
+PYTHONPATH=src python examples/custom_substrate.py
+```
+
+It wires a threshold classifier end to end and prints one turn: a baseline that mislabels half the samples, a proposal, and an acceptance — after which the same input that was wrong is right, with no restart.
+
+### 1. Declare your implementation
+
+Either register it in-process, or let a package declare it in its own `pyproject.toml`:
+
+```python
+from rsihybridagent import ExtensionPoint, register
+
+register(ExtensionPoint.SUBSTRATE, "my-system", MySubstrate(...))
+```
+
+```toml
+[project.entry-points."rsihybridagent.substrates"]
+my-system = "my_pkg.substrates:MySubstrate"
+```
+
+The entry-point route is the one that survives into someone else's environment, which is what makes it the mechanism that matters. **Your package does not import this project to declare itself**, and this project does not need to know your package exists.
+
+### 2. Implement the substrate
+
+Two of the five points live here. The marked lines are the only ones you replace:
+
+```python
+class MySubstrate(Substrate):
+    def kind(self) -> SubstrateKind:
+        return SubstrateKind.DIGITAL
+
+    def execute(self, request, *, scenario):
+        policy = self._current_policy(scenario)          # read the live release
+        result = my_system.run(request, policy)          # <-- YOUR CALL
+        receipt = Receipt(value=f"{scenario.name}-{n}", scenario=scenario)
+        return receipt, result
+
+    def health(self, *, scenario):
+        return {"healthy": self._reachable(scenario), "problem": None}
+```
+
+**Read the policy on every call, do not cache it at construction.** That is what makes an accepted improvement take effect on the next request. A substrate that cached it would pass every test and never reflect an update in production.
+
+**`health` takes a scenario.** Readiness is not global: a substrate whose policy was never released for a scenario is not ready for that scenario. There is no argument-free version, because it could only report the global half and would call a misconfigured scenario healthy.
+
+If your system is a separate process or a remote machine, `execute` is where the RPC happens and nothing else in the file changes. That is what keeps the agent side on CPU while the physical side holds the GPU.
+
+### 3. Implement the verifier
+
+Declare your layers **before** any run starts. That is what lets the ledger notice a layer that never ran:
+
+```python
+class MyVerifier(Verifier):
+    def declared_layers(self) -> tuple[str, ...]:
+        return ("contract", "behavior")
+
+    def verify(self, candidate, *, scenario) -> Evidence:
+        cases = self._score(candidate, scenario=scenario)
+        baseline = self.surface.current(scenario=scenario)
+        return Evidence(
+            scenario=scenario,
+            candidate=candidate,
+            baseline=baseline,
+            cases=cases,
+            declared_layers=self.declared_layers(),
+            attribution="behavior",
+        )
+```
+
+Two rules the framework relies on, both enforced by the ledger:
+
+- **Measure the baseline yourself.** Supplying a baseline figure from the recipe would let the party that produced the change also supply the number used to judge it.
+- **Report a layer that did not run as `NOT_RUN`, never as `FAILED`.** When a contract check short-circuits, the behavior layer did not execute; calling it failed blames a layer that never ran, and a wrong attribution corrupts every later decision that reads the entry.
+
+### 4. Implement the recipe
+
+```python
+class MyRecipe(Recipe):
+    def target_surface(self) -> Surface:
+        return self.surface
+
+    def eligible(self, receipts, feedback, *, scenario) -> bool:
+        return feedback.score is not None and feedback.score < 0.95
+
+    def propose(self, *, scenario):
+        return self.surface.stage(scenario=scenario, files={...})   # or None
+```
+
+**Return `None` when there is nothing to propose.** That is an ordinary outcome, not an error, and the loop treats it as one: no candidate means no ledger entry. A recipe that exhausted its range must be distinguishable from one that tried and failed.
+
+### 5. Wire it together
+
+```python
+loop = RecursiveLoop(
+    substrate=MySubstrate(...),
+    recipe=MyRecipe(...),
+    verifier=MyVerifier(...),
+    policy=EvidenceAdmissionPolicy(baseline_pass_rate=measured),
+    ledger=MemoryLedger(),
+)
+
+receipt, result = loop.serve(request, scenario=scenario)   # 1. run
+loop.observe(Feedback(receipts=(receipt,), score=0.0), scenario=scenario)  # 2. is there signal?
+candidate = loop.grow(scenario=scenario)                    # 3. produce a candidate
+entry = loop.commit(candidate, scenario=scenario)           # 4. verify, decide, publish
+```
+
+`commit` publishes **only** on `ACCEPTED`, and appends a ledger entry whatever the verdict — a rejection is as auditable as an acceptance.
+
+### Four things that will bite you
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `TypeError: Can't instantiate abstract class ... without an implementation for abstract method` | You used `@property @abstractmethod` and tried to satisfy it with a dataclass field | Use a method. A field of the same name becomes a class attribute holding a descriptor, so the subclass stays abstract and the message names a method it visibly defines |
+| `mypy` rejects your surface, but every test passes | The implementation duck-types the base instead of inheriting it | Inherit explicitly. Runtime checks cannot see the difference; the type checker can |
+| Your candidate is never accepted, reason mentions the baseline | Nothing was released for the scenario, so the policy has no baseline to compare against | Publish a baseline first |
+| A cross-scenario read raises "not found" instead of naming the scenario | You are reading through a different scenario than the one that stored the artifact | Pass the same `ScenarioId`. Scenarios never share a release chain, and the error names the owning scenario when it can |
+
+---
 
 ### Plugging in without forking
 
@@ -149,26 +288,34 @@ Seven groups are recognized, each with a contract its members must satisfy:
 The value may be the implementation itself or a zero-argument callable returning one. A value that does not satisfy its group's contract is **refused at resolution**, not at a later call site where the traceback would point at the wrong layer.
 
 ```bash
-rsihybrid extensions            # what is installed, and what each group requires
-rsihybrid check substrates libero
+rsihybrid extensions                                          # what is installed, and what each group requires
+rsihybrid extensions rsihybridagent.recipes                   # one group only
+rsihybrid check rsihybridagent.substrates my_pkg.sub:Thing    # resolve one and report whether it conforms
 ```
+
+`check` takes the **full group name**, not a short one, and prints the type it actually
+resolved so that "I configured X" and "Y was loaded" can be compared directly.
 
 ---
 
 ## Status
 
-**The loop runs end to end on CPU.** `examples/arithmetic_loop.py` completes a full turn — serve, observe, grow, commit — in under a second, including one rejected candidate and one accepted one.
+**The loop runs end to end on CPU.** Both examples below complete a full turn — serve, observe, grow, commit — in under a second.
 
 - ✅ Architecture design and interface contracts (`docs/`)
 - ✅ Extension registry, so a third-party backend plugs in without forking
 - ✅ A runnable reference implementation: substrate, surface, repository, recipe, verifier, policy, ledger
-- ✅ End-to-end validation on a deterministic task (52 tests)
+- ✅ An integration template you can copy: **[examples/custom_substrate.py](examples/custom_substrate.py)**
+- ✅ End-to-end validation on deterministic tasks (140 tests)
+- ✅ Docs that are checked against the code: `docs/interfaces.md` is compared with the
+  real signatures on every run, so it cannot drift the way it did once already
 - ⬜ A physical substrate (simulator or robot)
 - ⬜ The four interlock channels implemented — they are contracts today, not code
 - ⬜ Durable artifact storage and a durable ledger
 
 ```bash
-PYTHONPATH=src python examples/arithmetic_loop.py
+PYTHONPATH=src python examples/arithmetic_loop.py     # the loop, with a rejection and an acceptance
+PYTHONPATH=src python examples/custom_substrate.py    # how to attach your own system
 ```
 
 **Two prerequisites that must be stated plainly.**

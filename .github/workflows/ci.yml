@@ -36,10 +36,12 @@ jobs:
       - name: Type check
         run: mypy
 
-      # The reference loop must actually run, not merely type-check. A demo that
-      # silently broke would leave the README's quick-start claim unverified.
-      - name: Run the reference example
-        run: python examples/arithmetic_loop.py
+      # The reference loops must actually run, not merely type-check. A demo that
+      # silently broke would leave the README's quick-start claims unverified.
+      - name: Run the reference examples
+        run: |
+          python examples/arithmetic_loop.py
+          python examples/custom_substrate.py
 
   docs:
     name: docs (bilingual sync)

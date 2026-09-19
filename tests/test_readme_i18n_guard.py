@@ -76,9 +76,54 @@ class TestStripComments:
         body = "@misc{k,\n  title={A # B},\n}"
         assert guard.strip_comments("bibtex", body) == body
 
+    def test_python_comments_are_stripped_like_shell(self) -> None:
+        """A code sample's comment may be translated, exactly as a shell one may."""
+        english = "x = call()  # run it"
+        chinese = "x = call()  # 运行它"
+        assert guard.strip_comments("python", english) == guard.strip_comments("python", chinese)
+
     def test_blank_lines_and_indentation_are_normalized(self) -> None:
         """Whitespace-only differences must not read as drift."""
         assert guard.strip_comments("bash", "a\n\n   \nb") == "a\nb"
+
+
+class TestPythonCodeBlocks:
+    """A code sample is not prose: a translated comment is fine, a changed call is drift.
+
+    This is the case that matters most, because a README's code is what a reader copies.
+    A block that drifted would hand someone a call that does not exist, and nothing else
+    in the toolchain would notice — the sample is not imported by anything.
+    """
+
+    def test_a_translated_comment_passes(self) -> None:
+        """Translating a comment must not be reported as drift."""
+        english = "```python\nx = call()  # run it\n```"
+        chinese = "```python\nx = call()  # 运行它\n```"
+        assert guard.check_machine_readable_blocks(english, chinese) == []
+
+    def test_a_changed_api_call_is_caught(self) -> None:
+        """The call itself is the thing a reader copies, so it must match."""
+        english = "```python\nx = call()\n```"
+        chinese = "```python\nx = other_call()\n```"
+        assert guard.check_machine_readable_blocks(english, chinese) != []
+
+    def test_a_changed_keyword_argument_is_caught(self) -> None:
+        """A changed argument changes the meaning of the sample."""
+        english = "```python\nx = call()\n```"
+        chinese = "```python\nx = call(verbose=True)\n```"
+        assert guard.check_machine_readable_blocks(english, chinese) != []
+
+    def test_a_dropped_code_line_is_caught(self) -> None:
+        """Dropping the only executable line leaves an empty sample, which is drift."""
+        english = "```python\nx = call()\n```"
+        chinese = "```python\n# 运行它\n```"
+        assert guard.check_machine_readable_blocks(english, chinese) != []
+
+    def test_a_missing_block_is_caught(self) -> None:
+        """A sample present in one file and absent in the other is drift."""
+        english = "```python\nx = call()\n```"
+        chinese = "no sample here"
+        assert guard.check_machine_readable_blocks(english, chinese) != []
 
 
 class TestChecks:
@@ -140,7 +185,7 @@ class TestAgainstTheRealFiles:
         assert guard.main() == 0
 
 
-@pytest.mark.parametrize("language", ["bash", "toml", "bibtex"])
+@pytest.mark.parametrize("language", ["bash", "toml", "bibtex", "python"])
 def test_machine_readable_languages_are_covered(language: str) -> None:
     """Every language the guard treats as non-prose is actually in its list."""
     assert language in guard.MACHINE_READABLE_LANGUAGES

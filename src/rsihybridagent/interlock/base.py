@@ -138,14 +138,17 @@ class InterlockPort(ABC):
     verification, and the ledger could no longer attribute a regression.
     """
 
-    @property
     @abstractmethod
     def channel(self) -> Channel:
         """The channel this port serves."""
 
     @abstractmethod
-    def health(self) -> Mapping[str, Any]:
-        """Report readiness of the substrate this port touches."""
+    def health(self, *, scenario: ScenarioId) -> Mapping[str, Any]:
+        """Report readiness of the substrate this port touches, for one scenario.
+
+        Scoped per scenario because readiness is: a port whose substrate has loaded a
+        model for one scenario has not thereby loaded it for another.
+        """
 
 
 class CrossingProducer(InterlockPort):

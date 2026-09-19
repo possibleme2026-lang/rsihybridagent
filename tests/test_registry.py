@@ -23,10 +23,19 @@ different layer, where the traceback points at the wrong place.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
+from types import FunctionType
 
 import pytest
 
 from rsihybridagent.core import Receipt, ScenarioId, Substrate, SubstrateKind
+from rsihybridagent.interlock.base import (
+    Channel,
+    Crossing,
+    CrossingConsumer,
+    CrossingProducer,
+    InterlockPort,
+)
 from rsihybridagent.ledger.memory import MemoryLedger
 from rsihybridagent.registry import (
     REQUIRED_BASE,
@@ -212,3 +221,62 @@ def test_describe_handles_an_empty_group() -> None:
     """
     lines = describe(ExtensionPoint.INTERLOCK)
     assert any("nothing installed" in line for line in lines)
+
+
+def test_a_reference_to_a_class_needing_arguments_is_diagnosed() -> None:
+    """A reference to a constructor that requires arguments is a RegistryError, not a TypeError.
+
+    A class is callable, so this shape reaches the factory branch and used to fail with a
+    bare ``TypeError`` from inside the registry. That traceback points at the registry
+    instead of at the wiring mistake, and it never says the two accepted shapes are an
+    instance or a zero-argument factory. Pointing a group at a real backend class that
+    needs a connection is the most likely way to hit this.
+    """
+    with pytest.raises(RegistryError) as exc:
+        load(ExtensionPoint.SUBSTRATE, "rsihybridagent.substrate.arithmetic:ArithmeticSubstrate")
+    message = str(exc.value)
+    assert "could not be called with no arguments" in message
+    assert "zero-argument callable" in message
+    assert "Substrate" in message
+
+
+def test_interlock_port_is_a_method_not_a_property() -> None:
+    """``InterlockPort.channel`` must be a plain method, for the reason the other points are.
+
+    ``@property`` combined with ``@abstractmethod`` cannot be satisfied by a dataclass
+    field of the same name: the field becomes a class attribute holding the descriptor,
+    so the subclass stays abstract and raises at instantiation. The interlock point is
+    registered like every other, so it has to follow the same rule.
+    """
+    for name in ("channel", "health"):
+        assert isinstance(getattr(InterlockPort, name), FunctionType), (
+            f"InterlockPort.{name} is not a plain method; a dataclass implementation cannot satisfy it"
+        )
+    assert isinstance(CrossingProducer.produce, FunctionType)
+    assert isinstance(CrossingConsumer.consume, FunctionType)
+
+
+def test_a_dataclass_interlock_port_can_be_instantiated() -> None:
+    """A dataclass implementing the interlock port is constructible and resolves.
+
+    This is the failure the rule above prevents, asserted directly rather than by
+    inspecting descriptors: the subclass must be instantiable with its channel as a field.
+    """
+
+    @dataclass(frozen=True)
+    class _Producer(CrossingProducer):
+        _channel: Channel
+
+        def channel(self) -> Channel:
+            return self._channel
+
+        def health(self, *, scenario: ScenarioId) -> Mapping[str, object]:
+            return {"healthy": True}
+
+        def produce(self, *, scenario: ScenarioId) -> tuple[Crossing, ...]:
+            return ()
+
+    register(ExtensionPoint.INTERLOCK, "producer", _Producer(Channel.SKILL_TRANSFER))
+    resolved = load(ExtensionPoint.INTERLOCK, "producer")
+    assert isinstance(resolved, CrossingProducer)
+    assert resolved.channel() is Channel.SKILL_TRANSFER

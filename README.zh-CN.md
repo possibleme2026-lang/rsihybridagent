@@ -123,7 +123,145 @@ rsihybridagent 要求**每一次进化都必须附带一条可复核的物证记
 | `Recipe` | 如何从记录产生更新 | SAO/GRPO · harness 编辑 · memory 合并 |
 | `Ledger` | 物证与归因 | 分层验证器 · 失败归因 |
 
-四个扩展点的完整接口签名见 **[docs/interfaces.md](docs/interfaces.md)**。
+这些抽象、以及提供它们的七个注册组的完整签名，见 **[docs/interfaces.md](docs/interfaces.md)** ——
+该文档每次运行都会与真实代码比对。
+
+---
+
+## 接入你自己的系统
+
+框架提供：发布链、artifact 仓储、物证台账、准入策略、循环的顺序保证、场景隔离。**你只需提供五样东西**，合计不到六十行：
+
+| # | 你要写的 | 放在哪里 |
+|---|---|---|
+| 1 | 你的系统读取的策略/prompt 格式 | 与解析器放在一起的 render 函数 |
+| 2 | `execute` —— 调用你的系统 | `Substrate.execute` |
+| 3 | `health` —— 如何判断就绪 | `Substrate.health` |
+| 4 | 打分逻辑 | `Verifier` |
+| 5 | 下一个候选怎么生成 | `Recipe` |
+
+完整可运行模板见 **[examples/custom_substrate.py](examples/custom_substrate.py)**。直接跑：
+
+```bash
+PYTHONPATH=src python examples/custom_substrate.py
+```
+
+它把一个阈值分类器端到端接了起来，并打印一整轮：一个把一半样本判错的 baseline、一次提案、一次接受 —— 之后同一个输入由错变对，无需重启。
+
+### 1. 声明你的实现
+
+可以在进程内注册，也可以让你的包在自己的 `pyproject.toml` 里声明：
+
+```python
+from rsihybridagent import ExtensionPoint, register
+
+register(ExtensionPoint.SUBSTRATE, "my-system", MySubstrate(...))
+```
+
+```toml
+[project.entry-points."rsihybridagent.substrates"]
+my-system = "my_pkg.substrates:MySubstrate"
+```
+
+**entry point 这条路径才是能进入别人环境的那条**，因此它才是真正要紧的机制。**你的包不需要 import 本项目来声明自己**，本项目也不需要知道你的包存在。
+
+### 2. 实现 substrate
+
+五个接入点里有两个在这里。标记处是唯一需要你替换的地方：
+
+```python
+class MySubstrate(Substrate):
+    def kind(self) -> SubstrateKind:
+        return SubstrateKind.DIGITAL
+
+    def execute(self, request, *, scenario):
+        policy = self._current_policy(scenario)          # 读取当前发布的版本
+        result = my_system.run(request, policy)          # <-- 换成你的调用
+        receipt = Receipt(value=f"{scenario.name}-{n}", scenario=scenario)
+        return receipt, result
+
+    def health(self, *, scenario):
+        return {"healthy": self._reachable(scenario), "problem": None}
+```
+
+**每次调用都要重新读策略，不要在构造时缓存。** 这正是"被接受的改进能立刻生效"的原因。缓存策略的 substrate 能通过所有测试，却在生产环境里永远不反映更新。
+
+**`health` 接收 scenario。** 就绪不是全局属性：一个策略从未为某场景发布的 substrate，对该场景就是不就绪。这里没有无参版本，因为它只能回答全局那一半，会把配置错误的场景报成健康。
+
+如果你的系统是独立进程或远程机器，`execute` 就是发生 RPC 的地方，文件其余部分不用改。这正是让 agent 侧留在 CPU、而物理侧持有 GPU 的方式。
+
+### 3. 实现 verifier
+
+在任何运行开始**之前**声明你的层。这正是台账能发现"某层从未运行"的前提：
+
+```python
+class MyVerifier(Verifier):
+    def declared_layers(self) -> tuple[str, ...]:
+        return ("contract", "behavior")
+
+    def verify(self, candidate, *, scenario) -> Evidence:
+        cases = self._score(candidate, scenario=scenario)
+        baseline = self.surface.current(scenario=scenario)
+        return Evidence(
+            scenario=scenario,
+            candidate=candidate,
+            baseline=baseline,
+            cases=cases,
+            declared_layers=self.declared_layers(),
+            attribution="behavior",
+        )
+```
+
+框架依赖两条规则，都由台账强制：
+
+- **自己测 baseline。** 让 recipe 提供 baseline 数值，等于让"产生变更的一方"同时提供"评判该变更的数字"。
+- **没运行的层必须报 `NOT_RUN`，绝不能报 `FAILED`。** 当契约检查短路时，行为层并未执行；把它称为失败就是在归咎一个从未运行的层，而错误的归因会污染此后所有读取该条目的决策。
+
+### 4. 实现 recipe
+
+```python
+class MyRecipe(Recipe):
+    def target_surface(self) -> Surface:
+        return self.surface
+
+    def eligible(self, receipts, feedback, *, scenario) -> bool:
+        return feedback.score is not None and feedback.score < 0.95
+
+    def propose(self, *, scenario):
+        return self.surface.stage(scenario=scenario, files={...})   # 或 None
+```
+
+**没有可提案的就返回 `None`。** 这是正常结果，不是错误，循环也这样对待它：没有候选就没有台账条目。搜索空间耗尽的 recipe 必须能与"试过但失败"区分开。
+
+### 5. 串起来
+
+```python
+loop = RecursiveLoop(
+    substrate=MySubstrate(...),
+    recipe=MyRecipe(...),
+    verifier=MyVerifier(...),
+    policy=EvidenceAdmissionPolicy(baseline_pass_rate=measured),
+    ledger=MemoryLedger(),
+)
+
+receipt, result = loop.serve(request, scenario=scenario)   # 1. 服务
+loop.observe(Feedback(receipts=(receipt,), score=0.0), scenario=scenario)  # 2. 有信号吗
+candidate = loop.grow(scenario=scenario)                    # 3. 产出候选
+entry = loop.commit(candidate, scenario=scenario)           # 4. 验证、裁决、发布
+```
+
+`commit` **只在 `ACCEPTED` 时**发布，且无论裁决如何都追加台账条目 —— 拒绝与接受同样可审计。
+
+### 四个必踩的坑
+
+| 症状 | 原因 | 修法 |
+|---|---|---|
+| `TypeError: Can't instantiate abstract class ... without an implementation for abstract method` | 你用了 `@property @abstractmethod`，却想用同名 dataclass 字段满足它 | 改用方法。同名字段会变成持有描述符的类属性，子类因此仍是抽象类，而报错却指向一个它明明定义了的方法 |
+| `mypy` 拒绝你的 surface，但测试全过 | 实现只是鸭子类型地"长得像"基类，没有继承 | 显式继承。运行时检查看不出差别，类型检查器看得出 |
+| 候选从未被接受，理由里提到 baseline | 该场景没有发布过任何版本，策略没有可比对的基准 | 先发布一个 baseline |
+| 跨场景读取报 "not found"，而不是指出是哪个场景 | 你读取时传的 scenario 与存储时不同 | 传同一个 `ScenarioId`。场景之间从不共享发布链；能确定归属时错误里会指出所属场景 |
+
+---
 
 ### 不 fork 也能接入
 
@@ -149,26 +287,34 @@ libero = "my_pkg.substrates:LiberoSubstrate"
 注册值可以是实现本身，也可以是一个返回实现的零参可调用对象。**不满足本组契约的值会在解析阶段就被拒绝**，而不是等到某个调用点才失败 —— 那时 traceback 会指向错误的层。
 
 ```bash
-rsihybrid extensions            # 已安装了什么，以及每组要求什么
-rsihybrid check substrates libero
+rsihybrid extensions                                          # 已安装了什么，以及每组要求什么
+rsihybrid extensions rsihybridagent.recipes                   # 只看一个组
+rsihybrid check rsihybridagent.substrates my_pkg.sub:Thing    # 解析一个扩展并报告是否符合契约
 ```
+
+`check` 收的是**完整组名**，不是短名；它会打印实际解析到的类型，
+让「我配的是 X」与「加载的是 Y」可以直接对照。
 
 ---
 
 ## 状态
 
-**闭环已在 CPU 上端到端跑通。** `examples/arithmetic_loop.py` 在一秒内完成一整轮 Serve → Observe → Grow → Commit，其中包含一次被拒绝的候选和一次被接受的候选。
+**闭环已在 CPU 上端到端跑通。** 下面两个示例都能在一秒内完成一整轮 Serve → Observe → Grow → Commit。
 
 - ✅ 架构设计与接口契约（`docs/`）
 - ✅ 扩展点注册机制，第三方后端不 fork 即可接入
 - ✅ 可运行的 reference implementation：substrate / surface / repository / recipe / verifier / policy / ledger
-- ✅ 确定性任务上的端到端验证（52 个测试）
+- ✅ 可直接复制的接入模板：**[examples/custom_substrate.py](examples/custom_substrate.py)**
+- ✅ 确定性任务上的端到端验证（140 个测试）
+- ✅ 文档受代码校验：`docs/interfaces.md` 每次运行都与真实签名比对，
+  不会再像曾经那样悄悄漂移
 - ⬜ 物理侧 substrate（仿真器或真机）
 - ⬜ 四个互锁通道的实现 —— 目前是契约，不是代码
 - ⬜ 持久化 artifact 存储与持久化物证台账
 
 ```bash
-PYTHONPATH=src python examples/arithmetic_loop.py
+PYTHONPATH=src python examples/arithmetic_loop.py     # 闭环：一次被拒绝、一次被接受
+PYTHONPATH=src python examples/custom_substrate.py    # 如何接入你自己的系统
 ```
 
 **两个必须说清的前置约束。**

@@ -44,15 +44,16 @@ EXTERNAL_LINK = re.compile(r"https?://[^\s)\"'<>]+")
 INTERNAL_LINK = re.compile(r"\]\(((?!https?://)[^)#][^)]*)\)")
 FENCED_BLOCK = re.compile(r"^```(\w*)\n(.*?)^```$", re.MULTILINE | re.DOTALL)
 
-#: Blocks whose content must be identical in both files: they are not prose.
-#: ``bash`` and ``toml`` are here because a command or a key must not be translated.
-MACHINE_READABLE_LANGUAGES = ("bibtex", "bash", "toml")
+#: Blocks whose executable content must be identical in both files.
+#: ``python`` is here because a code sample is not prose: translating a comment is fine,
+#: changing an API call is drift. ``bash`` and ``toml`` likewise.
+MACHINE_READABLE_LANGUAGES = ("bibtex", "bash", "toml", "python")
 
-#: Languages whose blocks may carry translated comments. A shell block's commands must
-#: match byte for byte, but its ``#`` lines are read by a human and are expected to be in
-#: the file's language. Comparing them whole would force one README to carry comments in
-#: the other's language, which is worse than the drift this script exists to catch.
-COMMENT_PREFIXES = {"bash": "#", "toml": "#"}
+#: Languages whose blocks may carry translated comments. The code must match, but a ``#``
+#: line is read by a human and is expected to be in the file's own language. Comparing the
+#: blocks whole would force one README to carry comments in the other's language, which is
+#: worse than the drift this script exists to catch.
+COMMENT_PREFIXES = {"bash": "#", "toml": "#", "python": "#"}
 
 
 class Drift(Exception):

@@ -20,7 +20,7 @@ class LayerStatus(StrEnum):
     SKIPPED   # 主动跳过，必须给出理由
 ```
 
-> `NOT_RUN` 与 `FAILED` 的区别是本框架的核心不变式。见[分层状态语义](#六分层状态语义)。
+> `NOT_RUN` 与 `FAILED` 的区别是本框架的核心不变式。见[分层状态语义](#七分层状态语义)。
 
 ### 三种 artifact 身份
 
@@ -80,11 +80,67 @@ class Feedback:
 
 ---
 
-## 二、`Substrate`（执行基底）
+## 二、`Artifact` / `ArtifactRepository`（body 与存储）
+
+**`ArtifactRef` 是引用，`Artifact` 是 body。** 前者只带身份（surface、substrate、
+content/release/parent），可以被自由传递、比较、写进台账；后者带实际字节。把两者合成一个类型
+会在 `stage` 处立刻卡住——见[三、`Surface`](#三surface可进化面)里的说明。
+
+```python
+class ArtifactError(Exception): ...
+class ArtifactNotFound(ArtifactError): ...
+
+@dataclass(frozen=True)
+class Artifact:
+    ref: ArtifactRef
+    files: Mapping[str, str] = field(default_factory=dict)   # 文本面：harness / memory
+    payload: bytes | None = None                             # 二进制面：weights
+
+    @property
+    def content_id(self) -> ContentId: ...
+    @property
+    def release_id(self) -> ReleaseId: ...
+    def text(self, path: str) -> str: ...                    # 缺文件时抛错，不返回默认值
+
+class ArtifactRepository(ABC):
+    @abstractmethod
+    def store(
+        self,
+        *,
+        scenario: ScenarioId,
+        surface: ArtifactRef,
+        files: Mapping[str, str] | None = None,
+        payload: bytes | None = None,
+    ) -> ArtifactRef: ...
+
+    @abstractmethod
+    def materialize(self, ref: ArtifactRef, *, scenario: ScenarioId) -> Artifact: ...
+
+    @abstractmethod
+    def exists(self, ref: ArtifactRef, *, scenario: ScenarioId) -> bool: ...
+
+    @abstractmethod
+    def metadata(self, ref: ArtifactRef, *, scenario: ScenarioId) -> Mapping[str, Any]: ...
+```
+
+| 不变式 | 说明 |
+|---|---|
+| `files` 与 `payload` **二选一** | 两者皆空 → 这是「指向无物的引用」，构造即拒；两者皆有 → 该 artifact 没有确定的读取方，同样拒 |
+| `store` 的 `surface` 参数只提供身份 | 它带入 surface / substrate / `parent`，**自身的 content_id 与 release_id 被忽略**，由实际存入的 body 重新推导。传入上一个引用，就是发布链的构建方式 |
+| `store` 每次铸新 release | 内容相同也铸新的。合并会让 *发布过两次* 与 *发布过一次* 无法区分 |
+| `materialize` 缺 body 时抛 `ArtifactNotFound` | 不返回 `None`——调用方拿到的 `Artifact` 一定是完整可读的 |
+| 读取按 scenario 显式寻址 | 跨 scenario 读取在签名上就写明，不能靠默认值静默发生 |
+
+**为什么 `files` 与 `payload` 不统一成一个抽象**：checkpoint 没有有意义的「按文件」接口，
+硬套一层 mapping 会迫使每个权重读取方走一条它不想要的路径。文本面与二进制面各自干净，
+比一个两边都别扭的统一类型好。
+
+---
+
+## 三、`Substrate`（执行基底）
 
 ```python
 class Substrate(ABC):
-    @property
     @abstractmethod
     def kind(self) -> SubstrateKind: ...
 
@@ -94,32 +150,49 @@ class Substrate(ABC):
     ) -> tuple[Receipt, Mapping[str, Any]]: ...
 
     @abstractmethod
-    def health(self) -> Mapping[str, Any]: ...
+    def health(self, *, scenario: ScenarioId) -> Mapping[str, Any]: ...
 ```
 
 | 契约 | 说明 |
 |---|---|
 | 边界校验 | 基底在自身边界校验输入，并用自身词汇报告失败；上层不解析基底特有错误 |
 | 不得要求 GPU 栈 | 物理基底必须是**独立进程**，经 RPC 访问。这是 agent 侧能留在 CPU 上的原因 |
-| `health()` | 不健康的基底不得接受工作 |
+| `health(*, scenario)` | 不健康的基底不得接受工作 |
 
 `execute` 返回的 `Mapping` 是基底特有的，本层不解释其内容。
 
+**`kind` / `health` 是方法，不是 `@property`。** 这不是风格问题：`@property @abstractmethod`
+无法被子类的 dataclass 字段满足——同名字段会变成持有描述符的类属性，子类仍然抽象，
+实例化时报 `TypeError: Can't instantiate abstract class ... without an implementation`。
+所有扩展点的抽象成员一律用方法，使 dataclass 实现可以正常派生。
+
+**`health` 带 `scenario` 参数**，因为就绪性是**逐 scenario** 的：一个基底可能在 scenario A
+已加载模型、在 scenario B 尚未初始化。无参版本只能凭空捏造一个探测用的 scenario 名。
+
 ---
 
-## 三、`Surface`（可进化面）
+## 四、`Surface`（可进化面）
 
 ```python
 class Surface(ABC):
-    @property
     @abstractmethod
     def kind(self) -> SurfaceKind: ...
+
+    @abstractmethod
+    def repository(self) -> ArtifactRepository: ...
 
     @abstractmethod
     def current(self, *, scenario: ScenarioId) -> ArtifactRef | None: ...
 
     @abstractmethod
-    def stage(self, candidate: ArtifactRef, *, scenario: ScenarioId) -> ArtifactRef: ...
+    def stage(
+        self,
+        *,
+        scenario: ScenarioId,
+        files: Mapping[str, str] | None = None,
+        payload: bytes | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> ArtifactRef: ...
 
     @abstractmethod
     def publish(self, candidate: ArtifactRef, *, scenario: ScenarioId) -> ArtifactRef: ...
@@ -134,17 +207,29 @@ class Surface(ABC):
 **职责边界**：surface 只回答「当前 artifact 是什么」与「候选如何替换它」。
 候选**如何产生**属于 recipe；候选**好不好**属于 ledger。
 
+**surface 自己不存字节。** 它向 `repository()` 要，这是把存储布局挡在所有 surface 实现之外的原因：
+harness surface 存文件树、weights surface 存 checkpoint，两者不必背上对方的存储假设。
+
 | 方法 | 语义 |
 |---|---|
+| `kind` | 本 surface 服务哪一类 artifact |
+| `repository` | 本 surface 的字节存在哪里。**公开而非隐藏**：verifier 需要读候选的 body，而 verifier 刻意是与 surface 不同的协作者。把这次读取绕回 surface 会让 surface 成为验证输入的单一真相源，正是分离要避免的耦合 |
 | `current` | 首次提交前返回 `None` |
-| `stage` | 把候选放在当前发布**旁边**，尚不服务 |
+| `stage` | **直接接收字节**（`files` 或 `payload`），在内部铸出 `ArtifactRef` 并放在当前发布**旁边**，尚不服务 |
 | `publish` | 推进发布链并返回已发布引用 |
 | `rollback` | 回退到父版本；根处返回 `None` |
 | `deliver` | 让已发布 artifact 对消费者生效，返回运行时实例 id |
 
+**为什么 `stage` 收字节而不是收 `ArtifactRef`**：早期签名是
+`stage(candidate: ArtifactRef, ...)`，它无法工作——调用方若还没有 body，就没有
+`content_id` 可填；若已有 body，说明 body 已经被存过，那这次调用只是重复存储。
+候选的**产生**因此无法表达。现在的分工是：调用方给字节，surface 交给 repository 铸出引用。
+`store()` 每次铸**新 release**，即使内容与上次完全相同——*再次提出* 与 *提出过一次*
+是两个不同的事实，合并它们会丢掉重复尝试的记录。
+
 ---
 
-## 四、`Ledger` 与 `AdmissionPolicy`（物证台账）
+## 五、`Ledger` 与 `AdmissionPolicy`（物证台账）
 
 ### 分层结果
 
@@ -254,13 +339,12 @@ class EvidenceAdmissionPolicy(AdmissionPolicy):
 
 ---
 
-## 五、`Recipe` / `Verifier` / `RecursiveLoop`
+## 六、`Recipe` / `Verifier` / `RecursiveLoop`
 
 ```python
 class Recipe(ABC):
-    @property
     @abstractmethod
-    def surface(self) -> Surface: ...
+    def target_surface(self) -> Surface: ...
 
     @abstractmethod
     def eligible(
@@ -302,7 +386,7 @@ class RecursiveLoop:
 
 ---
 
-## 六、分层状态语义
+## 七、分层状态语义
 
 这是本框架最重要的接口约定。
 
@@ -329,7 +413,7 @@ if not case.all_layers_passed:
 
 ---
 
-## 七、`Interlock`（互锁通道）
+## 八、`Interlock`（互锁通道）
 
 ```python
 class Channel(StrEnum):
@@ -354,11 +438,10 @@ class Crossing:
     evidence: Evidence = field(kw_only=True)
 
 class InterlockPort(ABC):
-    @property
     @abstractmethod
     def channel(self) -> Channel: ...
     @abstractmethod
-    def health(self) -> Mapping[str, Any]: ...
+    def health(self, *, scenario: ScenarioId) -> Mapping[str, Any]: ...
 
 class CrossingProducer(InterlockPort):
     @abstractmethod
@@ -384,3 +467,97 @@ def validate_crossing(crossing: Crossing) -> None: ...
 
 **`validate_crossing` 检查**：来源基底的 kind 与通道声明一致；来源 artifact 的 surface 与通道声明一致；
 payload 非空；crossing 与 evidence 的 scenario 一致。
+
+---
+
+## 九、`ExtensionPoint`（扩展注册表）
+
+前面的章节说明实现必须**做什么**；本节说明实现如何**被找到**。两者缺一不可——
+一个没人能发现的接口不是开放接口，只是一个抽象类。
+
+```python
+class ExtensionPoint(StrEnum):
+    SUBSTRATE = "rsihybridagent.substrates"
+    SURFACE   = "rsihybridagent.surfaces"
+    RECIPE    = "rsihybridagent.recipes"
+    VERIFIER  = "rsihybridagent.verifiers"
+    POLICY    = "rsihybridagent.policies"
+    LEDGER    = "rsihybridagent.ledgers"
+    INTERLOCK = "rsihybridagent.interlock"
+
+#: 每个组的成员必须实现的抽象。这张表让注册表成为**兼容性检查**，而非查找表。
+REQUIRED_BASE: Mapping[ExtensionPoint, type] = {...}
+
+class RegistryError(Exception): ...
+
+def register(point: ExtensionPoint, name: str, value: object) -> None: ...
+def unregister(point: ExtensionPoint, name: str) -> None: ...
+def clear_local(point: ExtensionPoint | None = None) -> None: ...
+def available(point: ExtensionPoint) -> tuple[str, ...]: ...
+def load(point: ExtensionPoint, spec: str) -> object: ...
+def describe(point: ExtensionPoint) -> tuple[str, ...]: ...
+```
+
+### 三种提供实现的方式
+
+按持久程度递增：
+
+| 方式 | 写法 | 适用 |
+|---|---|---|
+| 直接引用 | `load(point, "my_pkg.module:MySubstrate")` | 脚本、测试、自行固定接线的部署 |
+| 进程内注册 | `register(point, name, value)` | 想用 fake 替换真实后端的测试 |
+| 已安装 entry point | 在 `pyproject.toml` 中声明 | 分发包。**唯一能进入他人环境的方式**，因此是真正重要的机制 |
+
+**为什么用 entry point 而不是扫描插件目录**：目录扫描为了知道「有什么」必须先 import，
+于是发现过程带副作用，结果还依赖文件系统顺序。entry point 声明在打包元数据里，
+列出来不 import 任何东西，集合是确定的。
+
+**组的值可以是实现本身，也可以是零参可调用对象返回实现。** 与 reef 采用同一约定，
+使为任一项目写的后端形状一致。两者都接受，是因为描述符天然是一个值，
+而持有连接的后端天然是一个工厂。
+
+```toml
+# 第三方包的 pyproject.toml —— 不需要 import 本框架的任何模块
+[project.entry-points."rsihybridagent.substrates"]
+libero = "my_pkg.substrates:LiberoSubstrate"
+
+[project.entry-points."rsihybridagent.verifiers"]
+libero = "my_pkg.verifiers:LiberoVerifier"
+```
+
+### `load` 的三条不变式
+
+| 不变式 | 说明 |
+|---|---|
+| **返回值已通过契约校验** | 返回值保证是所属组的 `REQUIRED_BASE` 实例。不合规的值在此处被拒，而不是等到调用点才炸——那时的 traceback 会指向错误的层 |
+| **名字缺失是错误，不是回退** | 静默的默认值会让部署以为自己跑的是物理基底，实际跑的是桩。这与证据台账要防的是同一类失败 |
+| **本地注册遮蔽同名已安装项** | 测试可以替换真实后端而不必卸载任何东西 |
+
+**为什么点号 spec 没有冒号会被当作格式错误而非「未知名字」**：`my_pkg.module` 看起来就像引用，
+也确实是有人想写引用时的形状。报「没有这个名字的扩展」会把人引向一个并不存在的注册错误。
+注册名按约定是裸标识符，这就是区分依据：
+
+```python
+def _looks_like_reference(spec: str) -> bool:
+    return bool(spec) and "." in spec and all(part.isidentifier() for part in spec.split("."))
+```
+
+同名被多个提供方声明时报 `RegistryError` 并列出全部来源，而不是任选一个——
+选一个会让「跑的是谁」变成环境巧合。
+
+### CLI
+
+命令名是 **`rsihybrid`**（`pyproject.toml` 的 `[project.scripts]` 条目），不是 `rsihybridagent`。
+
+```bash
+rsihybrid channels                                       # 列出四个互锁通道及其方向
+rsihybrid extensions                                     # 列出所有组及其可用实现
+rsihybrid extensions rsihybridagent.recipes              # 只看一个组
+rsihybrid check rsihybridagent.substrates my_pkg.sub:Thing   # 解析一个扩展并报告是否符合契约
+```
+
+空组会被**显示**而不是省略：正在排查后端缺失的部署需要看到「组存在但是空的」，
+这与「组根本没被识别」是两条不同的信息。
+
+`check` 的定位是诊断接线错误——它把 `RegistryError` 打给 stderr 并返回 1，
+成功时打印解析到的实际类型，让「我配了 X」与「实际加载的是 Y」当场对上。
